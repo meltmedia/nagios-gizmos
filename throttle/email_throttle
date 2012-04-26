@@ -1,0 +1,264 @@
+#!/usr/bin/python
+
+from pprint import pprint
+from email.MIMEMultipart import MIMEMultipart
+from email.MIMEText import MIMEText
+
+import argparse
+import copy
+import datetime
+import hashlib
+import logging
+import markdown
+import os
+import smtplib
+import sqlite3
+import subprocess
+import sys
+
+log = logging.getLogger("email.throttle")
+
+mail_settings = {
+  "host": "smtp.meltmedia.com",
+  "port": "9025",
+  "username": None,
+  "password": None
+}
+
+sql = {
+  "create": "create table if not exists 'throttle' ('hash' text PRIMARY KEY, 'group' text, 'date' timestamp, 'count' integer)",
+  "select": "select `hash`, `date`, `count`, `group` from `throttle` where `hash` = ?",
+  "insert": "insert into `throttle` values (?, ?, ?, ?)",
+  "update": "update `throttle` set `count` = ? where `hash` = ?",
+  "delete": "delete from `throttle` where `hash` = ?",
+  "select_all": "select `hash`, `date`, `count`, `group` from `throttle`"
+}
+
+def configure_logger(args):
+  hdlr = logging.FileHandler(args.log)
+  formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+  hdlr.setFormatter(formatter)
+  log.addHandler(hdlr)
+
+  numeric_level = getattr(logging, args.level.upper(), None)
+  if not isinstance(numeric_level, int):
+    raise ValueError('Invalid log level: %s' % args.level)
+
+  log.setLevel(numeric_level)
+
+def connect(args):
+  if not os.path.exists("%s%s" % (args.temp, args.database)):
+    connection = sqlite3.connect("%s%s" % (args.temp, args.database), detect_types=sqlite3.PARSE_DECLTYPES)
+
+    connection.cursor().execute(sql['create'])
+
+    return connection
+  else:
+    return sqlite3.connect("%s%s" % (args.temp, args.database), detect_types=sqlite3.PARSE_DECLTYPES)
+
+def remove_hash(cursor, args):
+  cursor.execute(sql['delete'], (args.hash, ))
+
+def update_hash(cursor, args, count):
+  cursor.execute(sql['update'], (count + 1, args.hash, ))
+
+def send_mail(args):
+  messages = ""
+
+  if os.path.exists(args.message_file) and os.stat(args.message_file).st_size > 0:
+    with open(args.message_file, "r") as cf:
+      lines = cf.readlines()
+      messages = "".join(lines)
+
+    os.remove(args.message_file)
+  
+  message_body = None
+
+  if len(messages) > 0:
+    message_body = "%s\n\n%s" % (args.message, messages)
+  else:
+    message_body = args.message
+
+  log.debug("email to: '%s', from: '%s', subject: '%s', message: '%s'" % (args.email, args.from_email, args.subject, message_body.replace('\n', '')))
+
+  msg = MIMEMultipart('alternative')
+  msg['Subject'] = args.subject
+  msg['From'] = args.from_email
+  msg['To'] = args.email
+
+  part1 = MIMEText(message_body, 'plain')
+  part2 = MIMEText(markdown.markdown(message_body), 'html')
+
+  msg.attach(part1)
+  msg.attach(part2)
+
+  smtp = smtplib.SMTP()
+  smtp.connect(mail_settings["host"], mail_settings["port"])
+  
+  if mail_settings["username"] is not None:
+    smtp.login(mail_settings["username"], mail_settings["password"])
+  
+  smtp.sendmail(args.from_email, args.email, msg.as_string())
+  smtp.quit()
+
+def write_message(args):
+  with open(args.message_file, "a") as cf:
+    cf.write(args.message_format % (args.subject, args.message))
+
+def parse_arguments(extra=None):
+  parser = argparse.ArgumentParser()
+
+  parser.add_argument('-i', '--initial', help='Number of seconds to wait before throttling', type=int, default=180)
+  parser.add_argument('-c', '--count', help='Number of emails to send before throttling, supersedes initial wait', type=int)
+  parser.add_argument('-w', '--wait', help='Number of seconds to wait between bulk messages', type=int, default=900)
+
+  parser.add_argument('-H', '--hash', help='Hash identifier, supersedes glob')
+  parser.add_argument('-g', '--glob', help='Glob identifier, will be hashed for use', default='default')
+
+  parser.add_argument('-m', '--message', help='Message')
+  parser.add_argument('-s', '--subject', help='Subject')
+  parser.add_argument('-e', '--email', help='To Email address')
+  parser.add_argument('-f', '--from_email', help='From Email Address')
+  parser.add_argument('-d', '--date', help='Date of the event', default=str(datetime.datetime.now()))
+  parser.add_argument('--message_format', help='Format to use for storing messages (subject, then message)', default='***\n#### %s\n\n%s\n\n\n')
+
+  parser.add_argument('--temp', help='Temp directory to store information', default='/tmp/email-alerts')
+  parser.add_argument('--database', help='Database file name', default='throttle.db')
+
+  parser.add_argument('--force', action='count', help='Always throttle')
+  parser.add_argument('--send', action='count', help='Always send')
+
+  parser.add_argument('--log', help='Log file to write to', default='/var/log/nagios3/email-throttle.log')
+  parser.add_argument('--level', help='Logging level', default="info")
+
+  parser.add_argument('--job', action='count', help='Run in cron job cleanup mode')
+
+  args = parser.parse_args()
+
+  # Normalize temp
+  if not args.temp.endswith('/'):
+    args.temp += '/'
+
+  if not os.path.exists(args.temp):
+    os.makedirs(args.temp)
+
+  return args
+
+def normalize_args(args, extra=None):
+  if extra is None:
+    if args.hash is None or len(args.hash) <= 0:
+      args.hash = hashlib.sha256(args.glob).hexdigest()
+
+    if args.message is None or len(args.message) <= 0:
+      lines = sys.stdin.readlines()
+      args.message = "".join(lines)
+
+    args.message_file = "%s%s.txt" % (args.temp, args.hash) 
+  
+    return args
+  else:
+    arguments = copy.copy(args)
+
+    arguments.hash = extra["hash"]
+    arguments.date = extra["date"]
+    arguments.glob = extra["glob"]
+
+    arguments.message_file = "%s%s.txt" % (arguments.temp, arguments.hash) 
+
+    return arguments
+
+  return None
+
+def process_notification(connection, cursor, arguments):
+  args = normalize_args(arguments)
+
+  if args.send:
+    log.debug("message must send")
+    send_mail(args)
+    return
+
+  cursor.execute(sql['select'], (args.hash, ))
+
+  res = cursor.fetchone()
+
+  if res is not None:
+    initial_delta = datetime.timedelta(seconds=args.initial)
+    wait_delta = datetime.timedelta(seconds=args.wait)
+
+    current_time = datetime.datetime.now()
+
+    time_delta = current_time - res[1]
+
+    if args.count is not None and res[2] < args.count and not args.force:
+      log.debug("not throttled by count: %s < %s" % (res[2], args.count))
+
+      update_hash(cursor, args, res[2])
+      send_mail(args)
+    elif time_delta < initial_delta and not args.force and args.count is None:
+      log.debug("not throttled by time: %s > %s" % (initial_delta, time_delta))
+
+      update_hash(cursor, args, res[2])
+      send_mail(args)
+    elif time_delta < wait_delta:
+      log.debug("throttling, write to file: %s > %s" % (wait_delta, time_delta))
+
+      update_hash(cursor, args, res[2])
+      write_message(args)
+    else:
+      log.debug("passed window, send '%s' w/ file if not empty" % (res[3]))
+
+      remove_hash(cursor, args)
+      send_mail(args)
+
+  else:
+    log.debug("message has a new hash: %s" % (args.hash))
+    #  "insert": "insert into 'throttle' values (?, ?, ?, ?)",
+    cursor.execute(sql['insert'], (args.hash, args.glob, args.date, 1, ))
+  
+    if args.force:
+      log.debug("forced throttling")
+
+      write_message(args)
+    else:
+      send_mail(args)
+
+def process_job(connection, cursor, args):
+  rows = cursor.execute(sql['select_all'])
+
+  for row in rows:
+    wait_delta = datetime.timedelta(seconds=args.wait)
+    current_time = datetime.datetime.now()
+
+    time_delta = current_time - row[1]
+
+    if time_delta > wait_delta:
+      log.debug("wait window has been passed for '%s': %s > %s" % (row[3], time_delta, wait_delta))
+
+      arguments = normalize_args(args, { "hash": row[0], "date": row[1], "glob": row[3] })
+      # Set Subject and message if none
+      if arguments.subject is None:
+        arguments.subject = "[BULK] Throttled Service/Host Notifications:"
+
+      if arguments.message is None:
+        arguments.message = ""
+
+      remove_hash(cursor, arguments)
+      send_mail(arguments)
+
+
+if __name__ == "__main__":
+  args = parse_arguments()
+
+  configure_logger(args)
+
+  connection = connect(args)
+  cursor = connection.cursor()
+
+  if not args.job:
+    process_notification(connection, cursor, args)
+  else:
+    process_job(connection, cursor, args)
+
+  connection.commit()
+  cursor.close()
+  connection.close()
