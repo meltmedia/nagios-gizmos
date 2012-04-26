@@ -19,19 +19,19 @@ import sys
 log = logging.getLogger("email.throttle")
 
 mail_settings = {
-  "host": "smtp.meltmedia.com",
-  "port": "9025",
+  "host": "localhost",
+  "port": "25",
   "username": None,
   "password": None
 }
 
 sql = {
-  "create": "create table if not exists 'throttle' ('hash' text PRIMARY KEY, 'group' text, 'date' timestamp, 'count' integer)",
-  "select": "select `hash`, `date`, `count`, `group` from `throttle` where `hash` = ?",
-  "insert": "insert into `throttle` values (?, ?, ?, ?)",
+  "create": "create table if not exists 'throttle' ('hash' text PRIMARY KEY, 'email' text, 'group' text, 'date' timestamp, 'count' integer)",
+  "select": "select `hash`, `date`, `count`, `group`, `email` from `throttle` where `hash` = ?",
+  "insert": "insert into `throttle` values (?, ?, ?, ?, ?)",
   "update": "update `throttle` set `count` = ? where `hash` = ?",
   "delete": "delete from `throttle` where `hash` = ?",
-  "select_all": "select `hash`, `date`, `count`, `group` from `throttle`"
+  "select_all": "select `hash`, `date`, `count`, `group`, `email` from `throttle` order by `date`"
 }
 
 def configure_logger(args):
@@ -56,13 +56,13 @@ def connect(args):
   else:
     return sqlite3.connect("%s%s" % (args.temp, args.database), detect_types=sqlite3.PARSE_DECLTYPES)
 
-def remove_hash(cursor, args):
-  cursor.execute(sql['delete'], (args.hash, ))
+def remove_hash(cursor, hash):
+  cursor.executemany(sql['delete'], hash)
 
 def update_hash(cursor, args, count):
   cursor.execute(sql['update'], (count + 1, args.hash, ))
 
-def send_mail(args):
+def send_mail(args, remove_temp=True):
   messages = ""
 
   if os.path.exists(args.message_file) and os.stat(args.message_file).st_size > 0:
@@ -70,7 +70,8 @@ def send_mail(args):
       lines = cf.readlines()
       messages = "".join(lines)
 
-    os.remove(args.message_file)
+  if remove_temp:
+    remove_temp_email(args)
   
   message_body = None
 
@@ -105,6 +106,11 @@ def write_message(args):
   with open(args.message_file, "a") as cf:
     cf.write(args.message_format % (args.subject, args.message))
 
+def remove_temp_email(args):
+  if os.path.exists(args.message_file):
+    os.remove(args.message_file)
+
+
 def parse_arguments(extra=None):
   parser = argparse.ArgumentParser()
 
@@ -114,6 +120,7 @@ def parse_arguments(extra=None):
 
   parser.add_argument('-H', '--hash', help='Hash identifier, supersedes glob')
   parser.add_argument('-g', '--glob', help='Glob identifier, will be hashed for use', default='default')
+  parser.add_argument('--ignore_email', action='count', help='Do not include the email address in the hash')
 
   parser.add_argument('-m', '--message', help='Message')
   parser.add_argument('-s', '--subject', help='Subject')
@@ -132,6 +139,7 @@ def parse_arguments(extra=None):
   parser.add_argument('--level', help='Logging level', default="info")
 
   parser.add_argument('--job', action='count', help='Run in cron job cleanup mode')
+  parser.add_argument('--skip_original_email', action='count', help='When running in clean up mode, do not send to the original sender')
 
   args = parser.parse_args()
 
@@ -147,7 +155,10 @@ def parse_arguments(extra=None):
 def normalize_args(args, extra=None):
   if extra is None:
     if args.hash is None or len(args.hash) <= 0:
-      args.hash = hashlib.sha256(args.glob).hexdigest()
+      if not args.ignore_email:
+        args.hash = hashlib.sha256(args.email + args.glob).hexdigest()
+      else:
+        args.hash = hashlib.sha256(args.glob).hexdigest()
 
     if args.message is None or len(args.message) <= 0:
       lines = sys.stdin.readlines()
@@ -207,13 +218,13 @@ def process_notification(connection, cursor, arguments):
     else:
       log.debug("passed window, send '%s' w/ file if not empty" % (res[3]))
 
-      remove_hash(cursor, args)
+      remove_hash(cursor, (args.hash, ))
       send_mail(args)
 
   else:
     log.debug("message has a new hash: %s" % (args.hash))
     #  "insert": "insert into 'throttle' values (?, ?, ?, ?)",
-    cursor.execute(sql['insert'], (args.hash, args.glob, args.date, 1, ))
+    cursor.execute(sql['insert'], (args.hash, args.email, args.glob, args.date, 1, ))
   
     if args.force:
       log.debug("forced throttling")
@@ -224,8 +235,10 @@ def process_notification(connection, cursor, arguments):
 
 def process_job(connection, cursor, args):
   rows = cursor.execute(sql['select_all'])
+  processed = []
 
   for row in rows:
+    print row
     wait_delta = datetime.timedelta(seconds=args.wait)
     current_time = datetime.datetime.now()
 
@@ -242,9 +255,17 @@ def process_job(connection, cursor, args):
       if arguments.message is None:
         arguments.message = ""
 
-      remove_hash(cursor, arguments)
-      send_mail(arguments)
+      if arguments.email is not None:
+        send_mail(arguments, remove_temp=False)
 
+      if not arguments.skip_original_email:
+        arguments.email = row[4]
+        send_mail(arguments)
+
+      processed.append((arguments.hash, ))
+      remove_temp_email(arguments)
+
+  remove_hash(cursor, processed)
 
 if __name__ == "__main__":
   args = parse_arguments()
