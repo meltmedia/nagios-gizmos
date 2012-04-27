@@ -22,7 +22,8 @@ mail_settings = {
   "host": "localhost",
   "port": "25",
   "username": None,
-  "password": None
+  "password": None,
+  "from": "nagios@example.com"
 }
 
 sql = {
@@ -83,9 +84,11 @@ def send_mail(args, remove_temp=True):
   log.debug("email to: '%s', from: '%s', subject: '%s', message: '%s'" % (args.email, args.from_email, args.subject, message_body.replace('\n', '')))
 
   msg = MIMEMultipart('alternative')
-  msg['Subject'] = args.subject
+  msg['Subject'] = replace_fields(args.subject, args)
   msg['From'] = args.from_email
   msg['To'] = args.email
+
+  message_body = replace_fields(message_body, args)
 
   part1 = MIMEText(message_body, 'plain')
   part2 = MIMEText(markdown.markdown(message_body), 'html')
@@ -110,6 +113,11 @@ def remove_temp_email(args):
   if os.path.exists(args.message_file):
     os.remove(args.message_file)
 
+def replace_fields(msg, args):
+  for org, rep in {"{hash}": args.hash, "{group}": args.group, "{email}": args.email, "{date}": str(args.date) }.iteritems():
+    msg = msg.replace(org, rep)
+  
+  return msg
 
 def parse_arguments(extra=None):
   parser = argparse.ArgumentParser()
@@ -118,14 +126,14 @@ def parse_arguments(extra=None):
   parser.add_argument('-c', '--count', help='Number of emails to send before throttling, supersedes initial wait', type=int)
   parser.add_argument('-w', '--wait', help='Number of seconds to wait between bulk messages', type=int, default=900)
 
-  parser.add_argument('-H', '--hash', help='Hash identifier, supersedes glob')
-  parser.add_argument('-g', '--glob', help='Glob identifier, will be hashed for use', default='default')
+  parser.add_argument('-H', '--hash', help='Hash identifier, supersedes group')
+  parser.add_argument('-g', '--group', help='Group identifier, will be hashed for use', default='default')
   parser.add_argument('--ignore_email', action='count', help='Do not include the email address in the hash')
 
   parser.add_argument('-m', '--message', help='Message')
   parser.add_argument('-s', '--subject', help='Subject')
   parser.add_argument('-e', '--email', help='To Email address')
-  parser.add_argument('-f', '--from_email', help='From Email Address')
+  parser.add_argument('-f', '--from_email', help='From Email Address', default=mail_settings["from"])
   parser.add_argument('-d', '--date', help='Date of the event', default=str(datetime.datetime.now()))
   parser.add_argument('--message_format', help='Format to use for storing messages (subject, then message)', default='***\n#### %s\n\n%s\n\n\n')
 
@@ -156,9 +164,9 @@ def normalize_args(args, extra=None):
   if extra is None:
     if args.hash is None or len(args.hash) <= 0:
       if not args.ignore_email:
-        args.hash = hashlib.sha256(args.email + args.glob).hexdigest()
+        args.hash = hashlib.sha256(args.email + args.group).hexdigest()
       else:
-        args.hash = hashlib.sha256(args.glob).hexdigest()
+        args.hash = hashlib.sha256(args.group).hexdigest()
 
     if args.message is None or len(args.message) <= 0:
       lines = sys.stdin.readlines()
@@ -172,7 +180,7 @@ def normalize_args(args, extra=None):
 
     arguments.hash = extra["hash"]
     arguments.date = extra["date"]
-    arguments.glob = extra["glob"]
+    arguments.group = extra["group"]
 
     arguments.message_file = "%s%s.txt" % (arguments.temp, arguments.hash) 
 
@@ -224,7 +232,7 @@ def process_notification(connection, cursor, arguments):
   else:
     log.debug("message has a new hash: %s" % (args.hash))
     #  "insert": "insert into 'throttle' values (?, ?, ?, ?)",
-    cursor.execute(sql['insert'], (args.hash, args.email, args.glob, args.date, 1, ))
+    cursor.execute(sql['insert'], (args.hash, args.email, args.group, args.date, 1, ))
   
     if args.force:
       log.debug("forced throttling")
@@ -236,9 +244,9 @@ def process_notification(connection, cursor, arguments):
 def process_job(connection, cursor, args):
   rows = cursor.execute(sql['select_all'])
   processed = []
+  log.debug("Running nagios throttle job")
 
   for row in rows:
-    print row
     wait_delta = datetime.timedelta(seconds=args.wait)
     current_time = datetime.datetime.now()
 
@@ -247,7 +255,7 @@ def process_job(connection, cursor, args):
     if time_delta > wait_delta:
       log.debug("wait window has been passed for '%s': %s > %s" % (row[3], time_delta, wait_delta))
 
-      arguments = normalize_args(args, { "hash": row[0], "date": row[1], "glob": row[3] })
+      arguments = normalize_args(args, { "hash": row[0], "date": row[1], "group": row[3] })
       # Set Subject and message if none
       if arguments.subject is None:
         arguments.subject = "[BULK] Throttled Service/Host Notifications:"
