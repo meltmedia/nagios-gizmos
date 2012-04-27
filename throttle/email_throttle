@@ -231,7 +231,6 @@ def process_notification(connection, cursor, arguments):
 
   else:
     log.debug("message has a new hash: %s" % (args.hash))
-    #  "insert": "insert into 'throttle' values (?, ?, ?, ?)",
     cursor.execute(sql['insert'], (args.hash, args.email, args.group, args.date, 1, ))
   
     if args.force:
@@ -258,7 +257,7 @@ def process_job(connection, cursor, args):
       arguments = normalize_args(args, { "hash": row[0], "date": row[1], "group": row[3] })
       # Set Subject and message if none
       if arguments.subject is None:
-        arguments.subject = "[BULK] Throttled Service/Host Notifications:"
+        arguments.subject = "[{group}] Throttled Service/Host Notifications"
 
       if arguments.message is None:
         arguments.message = ""
