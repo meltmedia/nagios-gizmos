@@ -27,12 +27,12 @@ mail_settings = {
 }
 
 sql = {
-  "create": "create table if not exists 'throttle' ('hash' text PRIMARY KEY, 'email' text, 'group' text, 'date' timestamp, 'count' integer)",
-  "select": "select `hash`, `date`, `count`, `group`, `email` from `throttle` where `hash` = ?",
-  "insert": "insert into `throttle` values (?, ?, ?, ?, ?)",
+  "create": "create table if not exists 'throttle' ('hash' text PRIMARY KEY, 'email' text, 'subject' text, 'group' text, 'date' timestamp, 'count' integer)",
+  "select": "select `hash`, `date`, `count`, `group`, `email`, `subject` from `throttle` where `hash` = ?",
+  "insert": "insert into `throttle` values (?, ?, ?, ?, ?, ?)",
   "update": "update `throttle` set `count` = ? where `hash` = ?",
   "delete": "delete from `throttle` where `hash` = ?",
-  "select_all": "select `hash`, `date`, `count`, `group`, `email` from `throttle` order by `date`"
+  "select_all": "select `hash`, `date`, `count`, `group`, `email`, `subject` from `throttle` order by `date`"
 }
 
 def configure_logger(args):
@@ -48,14 +48,18 @@ def configure_logger(args):
   log.setLevel(numeric_level)
 
 def connect(args):
+  connection = None
+
   if not os.path.exists("%s%s" % (args.temp, args.database)):
     connection = sqlite3.connect("%s%s" % (args.temp, args.database), detect_types=sqlite3.PARSE_DECLTYPES)
 
     connection.cursor().execute(sql['create'])
-
-    return connection
   else:
-    return sqlite3.connect("%s%s" % (args.temp, args.database), detect_types=sqlite3.PARSE_DECLTYPES)
+    connection = sqlite3.connect("%s%s" % (args.temp, args.database), detect_types=sqlite3.PARSE_DECLTYPES)
+
+  connection.row_factory = sqlite3.Row
+
+  return connection
 
 def remove_hash(cursor, hash):
   cursor.executemany(sql['delete'], hash)
@@ -128,6 +132,8 @@ def parse_arguments(extra=None):
 
   parser.add_argument('-H', '--hash', help='Hash identifier, supersedes group')
   parser.add_argument('-g', '--group', help='Group identifier, will be hashed for use', default='default')
+  parser.add_argument('--group_subject', action='count', help='Use the emails subject for group, supersedes group')
+  parser.add_argument('--ignore_group', action='count', help='Do not include the group in the hash')
   parser.add_argument('--ignore_email', action='count', help='Do not include the email address in the hash')
 
   parser.add_argument('-m', '--message', help='Message')
@@ -163,10 +169,19 @@ def parse_arguments(extra=None):
 def normalize_args(args, extra=None):
   if extra is None:
     if args.hash is None or len(args.hash) <= 0:
+      # Hash options: ignore_email, group_subject, ignore_group
+      hashstring = ""
+
       if not args.ignore_email:
-        args.hash = hashlib.sha256(args.email + args.group).hexdigest()
-      else:
-        args.hash = hashlib.sha256(args.group).hexdigest()
+        hashstring += args.email
+
+      if args.group_subject:
+        hashstring += args.subject
+
+      if not args.ignore_group:
+        hashstring += args.group
+
+      args.hash = hashlib.sha256(hashstring).hexdigest()
 
     if args.message is None or len(args.message) <= 0:
       lines = sys.stdin.readlines()
@@ -198,40 +213,40 @@ def process_notification(connection, cursor, arguments):
 
   cursor.execute(sql['select'], (args.hash, ))
 
-  res = cursor.fetchone()
+  row = cursor.fetchone()
 
-  if res is not None:
+  if row is not None:
     initial_delta = datetime.timedelta(seconds=args.initial)
     wait_delta = datetime.timedelta(seconds=args.wait)
 
     current_time = datetime.datetime.now()
 
-    time_delta = current_time - res[1]
+    time_delta = current_time - row['date']
 
-    if args.count is not None and res[2] < args.count and not args.force:
-      log.debug("not throttled by count: %s < %s" % (res[2], args.count))
+    if args.count is not None and row['count'] < args.count and not args.force:
+      log.debug("not throttled by count: %s < %s" % (row['count'], args.count))
 
-      update_hash(cursor, args, res[2])
+      update_hash(cursor, args, row['count'])
       send_mail(args)
     elif time_delta < initial_delta and not args.force and args.count is None:
       log.debug("not throttled by time: %s > %s" % (initial_delta, time_delta))
 
-      update_hash(cursor, args, res[2])
+      update_hash(cursor, args, row['count'])
       send_mail(args)
     elif time_delta < wait_delta:
       log.debug("throttling, write to file: %s > %s" % (wait_delta, time_delta))
 
-      update_hash(cursor, args, res[2])
+      update_hash(cursor, args, row['count'])
       write_message(args)
     else:
-      log.debug("passed window, send '%s' w/ file if not empty" % (res[3]))
+      log.debug("passed window, send '%s => %s' w/ file if not empty" % (args.hash, row['group']))
 
       remove_hash(cursor, (args.hash, ))
       send_mail(args)
 
   else:
     log.debug("message has a new hash: %s" % (args.hash))
-    cursor.execute(sql['insert'], (args.hash, args.email, args.group, args.date, 1, ))
+    cursor.execute(sql['insert'], (args.hash, args.email, args.subject, args.group, args.date, 1, ))
   
     if args.force:
       log.debug("forced throttling")
@@ -253,11 +268,14 @@ def process_job(connection, cursor, args):
 
     if time_delta > wait_delta:
       log.debug("wait window has been passed for '%s': %s > %s" % (row[3], time_delta, wait_delta))
-
-      arguments = normalize_args(args, { "hash": row[0], "date": row[1], "group": row[3] })
+      arguments = normalize_args(args, { "hash": row['hash'], "date": row['date'], "group": row['group'] })
+      
       # Set Subject and message if none
       if arguments.subject is None:
-        arguments.subject = "[{group}] Throttled Service/Host Notifications"
+        if row['subject'] is not None:
+          arguments.subject = row['subject']
+        else:
+          arguments.subject = "[{group}] Throttled Service/Host Notifications"
 
       if arguments.message is None:
         arguments.message = ""

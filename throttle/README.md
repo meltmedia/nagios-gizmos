@@ -9,8 +9,9 @@ The purpose is to prevent getting excessive emails from nagios on failed service
 Multiple parameters can be used to suppress or throttle messages.
 
     usage: email_throttle [-h] [-i INITIAL] [-c COUNT] [-w WAIT] [-H HASH]
-                          [-g GLOB] [--ignore_email] [-m MESSAGE] [-s SUBJECT]
-                          [-e EMAIL] [-f FROM_EMAIL] [-d DATE]
+                          [-g GROUP] [--group_subject] [--ignore_group]
+                          [--ignore_email] [-m MESSAGE] [-s SUBJECT] [-e EMAIL]
+                          [-f FROM_EMAIL] [-d DATE]
                           [--message_format MESSAGE_FORMAT] [--temp TEMP]
                           [--database DATABASE] [--force] [--send] [--log LOG]
                           [--level LEVEL] [--job] [--skip_original_email]
@@ -23,8 +24,11 @@ Multiple parameters can be used to suppress or throttle messages.
                             Number of emails to send before throttling, supersedes
                             initial wait
       -w WAIT, --wait WAIT  Number of seconds to wait between bulk messages
-      -H HASH, --hash HASH  Hash identifier, supersedes glob
-      -g GLOB, --glob GLOB  Glob identifier, will be hashed for use
+      -H HASH, --hash HASH  Hash identifier, supersedes group
+      -g GROUP, --group GROUP
+                            Group identifier, will be hashed for use
+      --group_subject       Use the emails subject for group, supersedes group
+      --ignore_group        Do not include the group in the hash
       --ignore_email        Do not include the email address in the hash
       -m MESSAGE, --message MESSAGE
                             Message
@@ -47,7 +51,7 @@ Multiple parameters can be used to suppress or throttle messages.
       --job                 Run in cron job cleanup mode
       --skip_original_email
                             When running in clean up mode, do not send to the
-                            original sender  
+                            original sender
 
 #### Message and Subject Formating
 
@@ -67,15 +71,19 @@ Test examples
 
     /usr/bin/printf "%b" "### Nagios\n\nNotification Type: **RECOVERY**  \n\nService: site - example.com  \nHost: web-host-1a  \nAddress: example.com  \nState: **OK**  \n\nDate/Time: **Wed Apr 25 12:15:06 UTC 2012**  \n\nAdditional Info:\n\n**HTTP OK: HTTP/1.1 200 OK - 11714 bytes in 0.214 second response time**  \n" | ./email_throttle -s "[RECOVERY] Service Alert: web-host-1a/example.com is OK" -e "who@example.com" -g "RECOVERY"
 
-Working example
+Usable examples
 
     /usr/bin/printf "%b" "### Nagios\n\nNotification Type: **$NOTIFICATIONTYPE$**  \n\nService: $SERVICEDESC$  \nHost: $HOSTALIAS$  \nAddress: $HOSTADDRESS$  \nState: **$SERVICESTATE**  \n\nDate/Time: **$LONGDATETIME$**  \n\nAdditional Info:\n\n**$SERVICEOUTPUT$**  \n" | /opt/nagios-gizmos/throttle/email_throttle -s "[$NOTIFICATIONTYPE$] $SERVICESTATE$ Service Alert: $HOSTALIAS$/$SERVICEDESC$" -e "$CONTACTEMAIL$" -c 3 -g "$NOTIFICATIONTYPE$$SERVICEGROUPNAMES$"
+
+    /usr/bin/printf "%b" "Nagios\n------\n\nNotification Type: **$NOTIFICATIONTYPE$**  \n\nService: $SERVICEDESC$  \nHost: $HOSTALIAS$  \nAddress: $HOSTADDRESS$  \nState: **$SERVICESTATE$**  \n\nDate/Time: **$LONGDATETIME$**  \n\nAdditional Info:\n\n**$SERVICEOUTPUT$**  \n" | /opt/nagios-gizmos/throttle/email_throttle -s '[$NOTIFICATIONTYPE$] $SERVICESTATE$ Service Alert: $HOSTALIAS$/$SERVICEDESC$' -e "$CONTACTEMAIL$" -c 3 --group_subject --ignore_group
 
 #### Cron Job Mode
 
 In order to ensure that once a time window has been passed without having to wait for a new notification it should also be run as a cron job. In this mode it will check all hashes and send any that are past the wait window, and cleanup the records for each hash.
 
     email_throttle --job -w 930 -s "[BULK NOTIFICATIONS] Host/Service Alert(s): {group}"
+
+    email_throttle --job -w 930
 
 ### What it's replacing
 
