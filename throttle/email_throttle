@@ -85,6 +85,10 @@ def send_mail(args, remove_temp=True):
   else:
     message_body = args.message
 
+  if message_body is None or len(message_body) <= 0:
+    log.info("empty message, not sending")
+    return
+
   log.debug("email to: '%s', from: '%s', subject: '%s', message: '%s'" % (args.email, args.from_email, args.subject, message_body.replace('\n', '')))
 
   msg = MIMEMultipart('alternative')
@@ -293,17 +297,32 @@ def process_job(connection, cursor, args):
   remove_hash(cursor, processed)
 
 if __name__ == "__main__":
-  args = parse_arguments()
+  try:
+    args = parse_arguments()
+  except Exception, e:
+    log.critical("Error Parsing Arguments: %s" % (e))
+    raise e
 
   configure_logger(args)
 
-  connection = connect(args)
-  cursor = connection.cursor()
+  connection = None
+  cursor = None
 
-  if not args.job:
-    process_notification(connection, cursor, args)
-  else:
-    process_job(connection, cursor, args)
+  try:
+    connection = connect(args)
+    cursor = connection.cursor()
+  except Exception, e:
+    log.critical("Error connecting to database: %s" % (e))
+    raise e
+
+  try:
+    if not args.job:
+      process_notification(connection, cursor, args)
+    else:
+      process_job(connection, cursor, args)
+  except Exception, e:
+    log.critical("Unable to process request: %s" % (e))
+    raise e
 
   connection.commit()
   cursor.close()
