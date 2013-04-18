@@ -97,4 +97,6 @@ The standard nagios alert scripts are incapable of throttling, which can lead to
 
 Currently configuration elements are contained within the script, these should be moved out into their own file to ease updates and distributing.
 
+Determine a way to flush the pending messages when the status of a service changes, this will allow the recovery and last problem emails to be sent in short order of each other.
+
 In order to support future modifications an extra abstraction layer should be added for how to perform notifications. Ideally this will be either the next script to call, or a pluggable interface for each type of notification, whether it is email, SMS, AWS SNS, etc. 
