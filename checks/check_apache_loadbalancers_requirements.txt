@@ -1,3 +1,0 @@
-nagiosplugin
-beautifulsoup4
-requests==2.3.0

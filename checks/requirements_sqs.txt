@@ -1,0 +1,2 @@
+nagiosplugin==1.2.2
+boto==2.32.0
