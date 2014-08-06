@@ -153,7 +153,7 @@ def parse_arguments(extra=None):
   parser.add_argument('--force', action='count', help='Always throttle')
   parser.add_argument('--send', action='count', help='Always send')
 
-  parser.add_argument('--log', help='Log file to write to', default='/var/log/nagios3/email-throttle.log')
+  parser.add_argument('--log', help='Log file to write to', default='/var/log/nagios/email-throttle.log')
   parser.add_argument('--level', help='Logging level', default="info")
 
   parser.add_argument('--job', action='count', help='Run in cron job cleanup mode')
