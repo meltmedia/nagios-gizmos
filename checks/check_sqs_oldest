@@ -47,7 +47,7 @@ class CheckSQSOldest(nagiosplugin.Resource):
     def get_oldest(self, queue):
         messages = queue.get_messages(
             num_messages=10, visibility_timeout=0, attributes='SentTimestamp',
-            wait_time_seconds=1)
+            wait_time_seconds=0)
 
         oldest = None
         for message in messages:
