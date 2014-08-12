@@ -11,9 +11,11 @@ DEFAULT_REGIONS = ['us-east-1', 'us-west-1']
 
 
 class CheckSQSOldest(nagiosplugin.Resource):
-    def __init__(self, regions, prefix):
+    def __init__(self, regions, prefix=None, name=None, exclude=None):
         self.regions = regions
         self.prefix = prefix
+        self.queue_name = name
+        self.exclude = exclude
 
         if not self.regions:
             self.regions = DEFAULT_REGIONS
@@ -40,7 +42,20 @@ class CheckSQSOldest(nagiosplugin.Resource):
     def get_queues(self):
         for region in self.regions:
             conn = boto.sqs.connect_to_region(region)
+
+            if self.queue_name:
+                q = conn.get_queue(self.queue_name)
+                if not q:
+                    continue
+
+                q.set_message_class(boto.sqs.message.RawMessage)
+                yield (region, q)
+                continue
+
             for q in conn.get_all_queues(prefix=self.prefix):
+                if self.exclude and self.exclude in q.name:
+                    continue
+
                 q.set_message_class(boto.sqs.message.RawMessage)
                 yield (region, q)
 
@@ -75,11 +90,19 @@ def main():
     parser.add_argument(
         '-p', '--prefix', default=None,
         help='Optionally, only return queues that start with this value.')
+    parser.add_argument(
+        '-n', '--name', default=None,
+        help='Optionally, only return a queue with this name.')
+    parser.add_argument(
+        '-e', '--exclude', default=None,
+        help='Exclude queues that contain this value')
 
     args = parser.parse_args()
 
     check = nagiosplugin.Check(
-        CheckSQSOldest(args.region, args.prefix),
+        CheckSQSOldest(
+            args.region, prefix=args.prefix,
+            name=args.name, exclude=args.exclude),
         nagiosplugin.ScalarContext('oldest', args.warning, args.critical))
 
     check.main()
