@@ -1,0 +1,54 @@
+#!/usr/bin/env python
+import requests
+from pynag.Plugins import PluginHelper, ok, warning, critical
+
+
+helper = PluginHelper()
+
+helper.parser.add_option(
+    '-H', dest="host", help="hostname of elasticsearch to check",
+    default="localhost")
+helper.parser.add_option(
+    '-P', dest="protocol", help="protocol to use (default http)",
+    default='http')
+helper.parser.add_option(
+    '-p', dest="port", help="port number to use (default 80)", default='80')
+
+helper.parse_arguments()
+
+url = "%s://%s:%s/_cluster/health" %\
+    (helper.options.protocol, helper.options.host, helper.options.port)
+
+try:
+    data = requests.get(url).json()
+
+    helper.add_metric(label='number_of_nodes',
+                      value=data['number_of_nodes'])
+    helper.add_metric(label='number_of_data_nodes',
+                      value=data['number_of_data_nodes'])
+    helper.add_metric(label='active_primary_shards',
+                      value=data['active_primary_shards'])
+    helper.add_metric(label='active_shards',
+                      value=data['active_shards'])
+    helper.add_metric(label='relocating_shards',
+                      value=data['relocating_shards'])
+    helper.add_metric(label='initializing_shards',
+                      value=data['initializing_shards'])
+    helper.add_metric(label='unassigned_shards',
+                      value=data['unassigned_shards'])
+
+    if data['status'] == 'green':
+        helper.status(ok)
+        helper.add_summary("%s" % data['status'])
+    elif data['status'] == 'yellow':
+        helper.status(warning)
+        helper.add_summary("%s" % data['status'])
+    else:
+        helper.status(critical)
+        helper.add_summary("status of %s is %s" % (url, data['status']))
+except:
+    helper.status(critical)
+    helper.add_summary('Could not connect to elasticsearch host "%s"' % url)
+
+helper.check_all_metrics()
+helper.exit()
