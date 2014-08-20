@@ -1,0 +1,92 @@
+#!/usr/bin/env python
+
+import requests
+import datetime
+import math
+from pynag.Plugins import PluginHelper, ok, critical, unknown
+
+helper = PluginHelper()
+
+helper.parser.add_option(
+    '-H', dest="host", help="hostname of elasticsearch to check",
+    default="localhost")
+helper.parser.add_option(
+    '-P', dest="protocol", help="protocol to use (default http)",
+    default='http')
+helper.parser.add_option(
+    '-p', dest="port", help="port number to use (default 80)", default='80')
+helper.parser.add_option(
+    '-i', dest="index", help="index path to query (default *)")
+helper.parser.add_option(
+    '-t', dest="timestamp", help="timestamp field in documents",
+    default="@timestamp")
+
+helper.parse_arguments()
+
+url = "%s://%s:%s/%s/_search" %\
+    (helper.options.protocol, helper.options.host, helper.options.port,
+     helper.options.index)
+
+query = '''
+{
+    "size": 0,
+    "query": {
+        "match_all": {}
+    },
+    "aggregations": {
+        "by_index": {
+            "terms": {
+                "field": "_index"
+            },
+            "aggs": {
+                "newest": {
+                    "max": {
+                        "field": "%s"
+                    }
+                }
+            }
+        }
+    }
+}
+''' % (helper.options.timestamp)
+
+try:
+    data = requests.post(url, data=query).json()
+
+    buckets = data['aggregations']['by_index']['buckets']
+    indexes = [bucket['key'] for bucket in buckets]
+
+    oldest = -1
+    oldest_index = "none"
+    for bucket in buckets:
+        index = bucket['key']
+        when = bucket['newest']['value']
+
+        now = datetime.datetime.now()
+        then = datetime.datetime.fromtimestamp(when / 1000)
+
+        delta = now - then
+
+        minutes = int(math.floor(delta.total_seconds() / 60))
+
+        if minutes > oldest:
+            oldest_index = index
+            oldest = minutes
+
+        helper.add_metric(label=bucket['key'],
+                          value=minutes)
+
+    helper.add_metric(label='oldest', value=oldest)
+
+    helper.status(ok)
+    helper.add_summary('"%s" is oldest at %s minutes' % (oldest_index, oldest))
+
+    if oldest == -1:
+        helper.status(unknown)
+except Exception as e:
+    helper.status(critical)
+    helper.add_summary(
+        'Could not connect to elasticsearch host "%s": %s' % (url, str(e)))
+
+helper.check_all_metrics()
+helper.exit()
