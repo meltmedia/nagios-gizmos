@@ -16,7 +16,8 @@ helper.parser.add_option(
 helper.parser.add_option(
     '-p', dest="port", help="port number to use (default 80)", default='80')
 helper.parser.add_option(
-    '-i', dest="index", help="index path to query (default *)")
+    '-i', dest="index", help="index path to query (default _all)",
+    default="_all")
 helper.parser.add_option(
     '-t', dest="timestamp", help="timestamp field in documents",
     default="@timestamp")
@@ -36,7 +37,8 @@ query = '''
     "aggregations": {
         "by_index": {
             "terms": {
-                "field": "_index"
+                "field": "_index",
+                "size": 0
             },
             "aggs": {
                 "newest": {
