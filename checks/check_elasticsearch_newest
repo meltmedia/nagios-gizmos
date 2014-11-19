@@ -22,11 +22,24 @@ helper.parser.add_option(
     '-t', dest="timestamp", help="timestamp field in documents",
     default="@timestamp")
 
+helper.parser.add_option(
+    '-c', dest="curated", action="store_true", help="curated indexes",
+    default=False)
+helper.parser.add_option(
+    '-f', dest="curated_format", help="curated index date format",
+    default="%Y.%m.%d")
+
 helper.parse_arguments()
+
+# Check for curated indexes
+index_pattern = helper.options.index
+if helper.options.curated:
+    today = datetime.datetime.now().strftime(helper.options.curated_format)
+    index_pattern = '%s%s' % (index_pattern, today)
 
 url = "%s://%s:%s/%s/_search" %\
     (helper.options.protocol, helper.options.host, helper.options.port,
-     helper.options.index)
+     index_pattern)
 
 query = '''
 {
