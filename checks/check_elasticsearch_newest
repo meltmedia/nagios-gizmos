@@ -3,6 +3,8 @@
 import requests
 import datetime
 import math
+import os
+import time
 from pynag.Plugins import PluginHelper, ok, critical, unknown
 
 helper = PluginHelper()
@@ -28,12 +30,18 @@ helper.parser.add_option(
 helper.parser.add_option(
     '-f', dest="curated_format", help="curated index date format",
     default="%Y.%m.%d")
+helper.parser.add_option(
+    '-z', dest="timezone", help="timezone for curated date",
+    default="UTC")
 
 helper.parse_arguments()
 
 # Check for curated indexes
 index_pattern = helper.options.index
 if helper.options.curated:
+    os.environ['TZ'] = helper.options.timezone
+    time.tzset()
+
     today = datetime.datetime.now().strftime(helper.options.curated_format)
     index_pattern = '%s%s' % (index_pattern, today)
 
