@@ -25,7 +25,9 @@ class CheckSQSOldest(nagiosplugin.Resource):
             logging.debug('checking status for queue %s' % queue.name)
             oldest = self.get_oldest(queue)
 
-            name = '%s.%s' % (region, queue.name)
+            name = queue.name
+            if len(self.regions) > 1:
+                name = '%s.%s' % (region, queue.name)
             if not oldest:
                 yield nagiosplugin.Metric(name, 0, context='oldest')
                 continue

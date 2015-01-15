@@ -4,6 +4,7 @@ import requests
 import datetime
 import math
 import os
+import re
 import time
 from pynag.Plugins import PluginHelper, ok, critical, unknown
 
@@ -96,7 +97,11 @@ try:
             oldest_index = index
             oldest = minutes
 
-        helper.add_metric(label=bucket['key'],
+        bucket_name = index
+        if helper.options.curated:
+            bucket_name = re.sub('[\-_]+%s$' % today, '', bucket_name)
+
+        helper.add_metric(label=bucket_name,
                           value=minutes)
 
     helper.add_metric(label='oldest', value=oldest)
