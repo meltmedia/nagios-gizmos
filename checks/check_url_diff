@@ -1,0 +1,110 @@
+#!/bin/bash
+
+CURL="/usr/bin/curl"
+DIFF="/usr/bin/diff"
+
+
+PROGNAME=`/usr/bin/basename $0`
+PROGPATH=`echo $0 | sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+REVISION="1.0.0"
+
+. $PROGPATH/utils.sh
+
+print_usage() {
+    echo "Usage: $PROGNAME -u url -s path"
+    echo "Usage: $PROGNAME --help"
+    echo "Usage: $PROGNAME --version"
+}
+
+print_help() {
+    print_revision $PROGNAME $REVISION
+    echo ""
+    print_usage
+    echo ""
+    echo "URL diff plugin for Nagios"
+    echo ""
+    support
+}
+
+if [ $# -lt 1 ]; then
+    print_usage
+    exit $STATE_UNKNOWN
+fi
+
+exitstatus=$STATE_WARNING #default
+while test -n "$1"; do
+    case "$1" in
+        --help)
+            print_help
+            exit $STATE_OK
+            ;;
+        -h)
+            print_help
+            exit $STATE_OK
+            ;;
+        --version)
+            print_revision $PROGNAME $REVISION
+            exit $STATE_OK
+            ;;
+        -V)
+            print_revision $PROGNAME $REVISION
+            exit $STATE_OK
+            ;;
+        --url)
+            url=$2
+            shift
+            ;;
+        -u)
+            url=$2
+            shift
+            ;;
+        --src)
+            srcpath=$2
+            shift
+            ;;
+        -s)
+            srcpath=$2
+            shift
+            ;;
+        -x)
+            exitstatus=$2
+            shift
+            ;;
+        --exitstatus)
+            exitstatus=$2
+            shift
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            print_usage
+            exit $STATE_UNKNOWN
+            ;;
+    esac
+    shift
+done
+
+if [ ! -e $srcpath ]; then
+    echo "URL diff check error: Source file $srcpath does not exist!"
+    exit $STATE_UNKNOWN
+elif [ ! -r $srcpath ] ; then
+    echo "URL diff check error: Source file $srcpath is not readable!"
+    exit $STATE_UNKNOWN
+fi
+
+if [ -z "$url" ]; then
+  echo "URL diff check error: URL must be specified!"
+  exit $STATE_UNKNOWN
+fi
+
+differences=$($CURL -s $url | $DIFF - $srcpath)
+result=$?
+
+if [ "$result" == "0" ]; then
+  echo "URL diff check ok - no differences"
+  exitstatus=$STATE_OK
+else
+  echo "URL diff not good ($?) - differences!"
+  exitstatus=$STATE_CRITICAL
+fi
+
+exit $exitstatus
