@@ -2,6 +2,7 @@
 
 CURL="/usr/bin/curl"
 DIFF="/usr/bin/diff"
+GREP="/bin/grep"
 
 
 PROGNAME=`/usr/bin/basename $0`
@@ -11,9 +12,13 @@ REVISION="1.0.0"
 . $PROGPATH/utils.sh
 
 print_usage() {
-    echo "Usage: $PROGNAME -u url -s path"
-    echo "Usage: $PROGNAME --help"
-    echo "Usage: $PROGNAME --version"
+    echo "Usage: $PROGNAME [options...]"
+    echo "Options:"
+    echo " -u, --url        URL to compare with"
+    echo " -s, --src        File to compare URL against"
+    echo " -v, --exclude    Use grep -v to exclude lines from output."
+    echo " -h, --help       This help text"
+    echo " -V, --version    Show version number and quit"
 }
 
 print_help() {
@@ -74,6 +79,14 @@ while test -n "$1"; do
             exitstatus=$2
             shift
             ;;
+        -v)
+            exclude=$2
+            shift
+            ;;
+        --exclude)
+            exclude=$2
+            shift
+            ;;
         *)
             echo "Unknown argument: $1"
             print_usage
@@ -96,7 +109,12 @@ if [ -z "$url" ]; then
   exit $STATE_UNKNOWN
 fi
 
-differences=$($CURL -s $url | $DIFF - $srcpath)
+if [ ! -z "$exclude" ]; then
+  differences=$($CURL -s $url | $GREP -v $exclude | $DIFF - $srcpath)
+else
+  differences=$($CURL -s $url $exclude | $DIFF - $srcpath)
+fi
+
 result=$?
 
 if [ "$result" == "0" ]; then
